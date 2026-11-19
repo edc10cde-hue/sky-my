@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>سماء العراق</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap">
+<style>
+:root{--bg:#0B1220;--p:#121B2E;--t:#E8EEF7;--m:#9AA8BF;--a:#3DD6C6;--l:#2A3854}
+body.day{--bg:#F4F7FB;--p:#fff;--t:#10213A;--m:#52627C;--a:#0A8F84;--l:#D5DDEA}
+*{box-sizing:border-box}
+body{margin:0;height:100vh;display:flex;flex-direction:column;font-family:Cairo,system-ui,sans-serif;background:var(--bg);color:var(--t)}
+header{display:flex;justify-content:space-between;align-items:center;padding:10px 14px}
+h1{margin:0;font-size:20px}
+.row{display:flex;gap:8px;padding:0 14px 8px;flex-wrap:wrap}
+button,select,input{font:inherit;color:var(--t);background:var(--p);border:1px solid var(--l);border-radius:12px;min-height:44px;padding:0 12px}
+button.on{border-color:var(--a);color:var(--a);font-weight:600}
+input{flex:1;min-width:0}
+#map{flex:1;min-height:220px}
+#list{height:36%;overflow:auto;padding:8px 14px}
+.card{display:flex;justify-content:space-between;width:100%;text-align:right;margin-bottom:8px;padding:10px 14px;height:auto}
+.card small{color:var(--m)}
+.ap{color:var(--a);font-weight:600;text-align:left}
+#st{color:#F5B942;font-size:13px;padding:0 14px}
+.pl{transition:transform .3s}
+</style>
+</head>
+<body>
+<header><h1>سماء العراق</h1><span id="cnt"></span><button id="th" aria-label="تبديل الوضع الليلي والنهاري">☀</button></header>
+<div class="row">
+ <select id="region" aria-label="المنطقة"><option value="iraq">العراق</option><option value="gulf">العراق والجوار</option><option value="world">العالم كله</option></select>
+ <select id="source" aria-label="المصدر"><option value="opensky">OpenSky</option><option value="sim">تجريبي</option></select>
+ <button id="loc">موقعي</button>
+</div>
+<div class="row">
+ <input id="q" type="search" placeholder="ابحث برقم الرحلة أو الدولة" aria-label="بحث">
+ <button id="near">المقتربة</button>
+</div>
+<div id="st"></div>
+<div id="map"></div>
+<div id="list"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const S = { region: 'iraq', source: 'opensky', q: '', near: false, user: null, flights: [], prev: {} };
+const VIEW = { iraq: [[33.2, 43.7], 6], gulf: [[30, 45], 4], world: [[20, 30], 2] };
+const DIR = ['شمال', 'شمال شرق', 'شرق', 'جنوب شرق', 'جنوب', 'جنوب غرب', 'غرب', 'شمال غرب'];
+const map = L.map('map', { zoomControl: false }).setView(...VIEW.iraq);
+const layer = L.layerGroup().addTo(map);
+let tiles, userMark;
+
+function setTheme(t) {
+  localStorage.th = t;
+  document.body.classList.toggle('day', t === 'day');
+  if (tiles) tiles.remove();
+  tiles = L.tileLayer('https://{s}.basemaps.cartocdn.com/' + (t === 'day' ? 'rastertiles/voyager' : 'dark_all') + '/{z}/{x}/{y}{r}.png',
+    { maxZoom: 12, attribution: '© OpenStreetMap © CARTO' }).addTo(map);
+}
+setTheme(localStorage.th || 'dark');
+$('th').onclick = () => setTheme(document.body.classList.contains('day') ? 'dark' : 'day');
+
+const rad = x => x * Math.PI / 180;
+function dist(a, b, c, d) {
+  const h = Math.sin(rad(c - a) / 2) ** 2 + Math.cos(rad(a)) * Math.cos(rad(c)) * Math.sin(rad(d - b) / 2) ** 2;
+  return 12742 * Math.asin(Math.sqrt(h));
+}
+function bearing(a, b, c, d) {
+  const y = Math.sin(rad(d - b)) * Math.cos(rad(c));
+  const x = Math.cos(rad(a)) * Math.sin(rad(c)) - Math.sin(rad(a)) * Math.cos(rad(c)) * Math.cos(rad(d - b));
+  return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+}
+const icon = trk => L.divIcon({ className: '', iconSize: [24, 24],
+  html: '<svg class="pl" width="24" height="24" viewBox="0 0 24 24" style="transform:rotate(' + trk + 'deg)" fill="#3DD6C6"><path d="M12 2l2 8 8 4v2l-8-2-1 5 3 2v1l-4-1-4 1v-1l3-2-1-5-8 2v-2l8-4z"/></svg>' });
+
+async function load() {
+  try {
+    const r = await fetch('/api/flights?source=' + S.source + '&region=' + S.region);
+    if (!r.ok) throw 0;
+    S.flights = (await r.json()).flights;
+    $('st').textContent = '';
+  } catch {
+    $('st').textContent = 'تعذر جلب البيانات. جرّب المصدر التجريبي أو أعد المحاولة بعد قليل.';
+  }
+  draw();
+}
+
+function draw() {
+  const q = S.q.trim().toLowerCase();
+  const next = {};
+  let rows = S.flights.map(f => {
+    let d = null, ap = false;
+    if (S.user) {
+      d = dist(S.user.lat, S.user.lon, f.lat, f.lon);
+      const p = S.prev[f.id];
+      ap = p != null && d < p;
+      next[f.id] = d;
+    }
+    return { ...f, d, ap };
+  });
+  S.prev = next;
+  rows = rows.filter(f => (!q || (f.call + ' ' + f.country).toLowerCase().includes(q)) && (!S.near || f.ap));
+  rows.sort((a, b) => S.user ? a.d - b.d : b.alt - a.alt);
+  $('cnt').textContent = rows.length + ' من ' + S.flights.length;
+  layer.clearLayers();
+  rows.slice(0, 800).forEach(f => L.marker([f.lat, f.lon], { icon: icon(f.trk) }).bindTooltip(f.call).addTo(layer));
+  $('list').innerHTML = rows.length ? '' : '<p>لا توجد نتائج. خفّف الفلاتر أو غيّر المنطقة.</p>';
+  rows.slice(0, 40).forEach(f => {
+    const b = document.createElement('button');
+    b.className = 'card';
+    const dir = S.user ? DIR[Math.round(bearing(S.user.lat, S.user.lon, f.lat, f.lon) / 45) % 8] : '';
+    b.innerHTML = '<div><b>' + f.call + '</b><br><small>' + f.country + ' · ' + f.alt.toLocaleString() + ' قدم · ' + f.spd + ' عقدة</small></div>' +
+      (S.user ? '<div class="ap">' + (f.ap ? 'تقترب' : 'تبتعد') + '<br>' + Math.round(f.d) + ' كم ' + dir + '</div>' : '');
+    b.onclick = () => map.setView([f.lat, f.lon], 9);
+    $('list').appendChild(b);
+  });
+}
+
+$('region').onchange = e => { S.region = e.target.value; map.setView(...VIEW[S.region]); load(); };
+$('source').onchange = e => { S.source = e.target.value; load(); };
+$('q').oninput = e => { S.q = e.target.value; draw(); };
+$('near').onclick = e => { S.near = !S.near; e.target.classList.toggle('on', S.near); draw(); };
+$('loc').onclick = () => navigator.geolocation.getCurrentPosition(p => {
+  S.user = { lat: p.coords.latitude, lon: p.coords.longitude };
+  if (userMark) userMark.remove();
+  userMark = L.circleMarker([S.user.lat, S.user.lon], { radius: 7, color: '#F5B942' }).addTo(map);
+  draw();
+}, () => { $('st').textContent = 'لم يُسمح بالوصول إلى موقعك.'; });
+
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
+load();
+setInterval(load, 10000);
+</script>
+</body>
+</html>
