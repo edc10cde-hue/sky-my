@@ -32,7 +32,7 @@ input{flex:1;min-width:0}
 <header><h1>سماء العراق</h1><span id="cnt"></span><button id="th" aria-label="تبديل الوضع الليلي والنهاري">☀</button></header>
 <div class="row">
  <select id="region" aria-label="المنطقة"><option value="iraq">العراق</option><option value="gulf">العراق والجوار</option><option value="world">العالم كله</option></select>
- <select id="source" aria-label="المصدر"><option value="opensky">OpenSky</option><option value="sim">تجريبي</option></select>
+ <select id="source" aria-label="المصدر"><option value="adsb">ADSB.lol</option><option value="opensky">OpenSky</option><option value="sim">تجريبي</option></select>
  <button id="loc">موقعي</button>
 </div>
 <div class="row">
@@ -45,7 +45,7 @@ input{flex:1;min-width:0}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
 const $ = id => document.getElementById(id);
-const S = { region: 'iraq', source: 'opensky', q: '', near: false, user: null, flights: [], prev: {} };
+const S = { region: 'iraq', source: 'adsb', q: '', near: false, user: null, flights: [], prev: {} };
 const VIEW = { iraq: [[33.2, 43.7], 6], gulf: [[30, 45], 4], world: [[20, 30], 2] };
 const DIR = ['شمال', 'شمال شرق', 'شرق', 'جنوب شرق', 'جنوب', 'جنوب غرب', 'غرب', 'شمال غرب'];
 const map = L.map('map', { zoomControl: false }).setView(...VIEW.iraq);
@@ -100,20 +100,32 @@ async function api(source) {
   if (!r.ok) throw 0;
   return (await r.json()).flights;
 }
+const CENTER = { iraq: [33.3, 43.9, 250], gulf: [30, 46, 250] };
+async function adsb() {
+  const c = CENTER[S.region];
+  if (!c) throw 0;
+  const r = await fetch('https://api.adsb.lol/v2/point/' + c.join('/'));
+  if (!r.ok) throw 0;
+  const j = await r.json();
+  let d = (j.ac || []).filter(a => a.lat != null && a.lon != null && typeof a.alt_baro === 'number').map(a => ({
+    id: a.hex, call: (a.flight || '').trim() || a.hex, country: [a.t, a.r].filter(Boolean).join(' '),
+    lon: a.lon, lat: a.lat, alt: Math.round(a.alt_baro), spd: Math.round(a.gs || 0), trk: Math.round(a.track || 0) }));
+  if (S.region === 'iraq') d = d.filter(f => inside(f.lon, f.lat, IRAQ));
+  return d;
+}
 async function load() {
-  let msg = '';
-  try {
-    S.flights = S.source === 'sim' ? await api('sim') : await api('opensky');
-  } catch {
+  let msg = '', ok = false;
+  const tries = S.source === 'sim' ? [() => api('sim')]
+    : S.source === 'opensky' ? [() => api('opensky'), direct, adsb]
+    : [adsb, () => api('opensky'), direct];
+  for (const t of tries) {
+    try { S.flights = await t(); ok = true; break; } catch {}
+  }
+  if (!ok) {
     try {
-      if (S.source === 'sim') throw 0;
-      S.flights = await direct();
-    } catch {
-      try {
-        S.flights = await api('sim');
-        msg = 'تعذر الوصول إلى OpenSky. تُعرض بيانات تجريبية الآن.';
-      } catch { msg = 'تعذر جلب البيانات. أعد المحاولة بعد قليل.'; }
-    }
+      S.flights = await api('sim');
+      msg = 'تعذر الوصول إلى مصادر البيانات الحية. تُعرض بيانات تجريبية الآن.';
+    } catch { msg = 'تعذر جلب البيانات. أعد المحاولة بعد قليل.'; }
   }
   $('st').textContent = msg;
   draw();
