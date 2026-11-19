@@ -19,7 +19,7 @@ h1{margin:0;font-size:20px}
 button,select,input{font:inherit;color:var(--t);background:var(--p);border:1px solid var(--l);border-radius:12px;min-height:44px;padding:0 12px}
 button.on{border-color:var(--a);color:var(--a);font-weight:600}
 input{flex:1;min-width:0}
-#map{flex:1;min-height:220px}
+#map{flex:1;min-height:220px;direction:ltr}
 #list{height:36%;overflow:auto;padding:8px 14px}
 .card{display:flex;justify-content:space-between;width:100%;text-align:right;margin-bottom:8px;padding:10px 14px;height:auto}
 .card small{color:var(--m)}
@@ -152,7 +152,7 @@ function draw() {
   $('cnt').textContent = rows.length + ' من ' + S.flights.length;
   layer.clearLayers();
   rows.slice(0, 800).forEach(f => L.marker([f.lat, f.lon], { icon: icon(f.trk) }).bindTooltip(f.call).addTo(layer));
-  $('list').innerHTML = rows.length ? '' : '<p>لا توجد نتائج. خفّف الفلاتر أو غيّر المنطقة.</p>';
+  $('list').innerHTML = rows.length ? '' : '<p>' + (S.flights.length ? 'لا توجد نتائج. خفّف الفلاتر أو غيّر المنطقة.' : 'لا توجد طائرات في هذه المنطقة الآن. جرّب العراق والجوار أو مصدرًا آخر.') + '</p>';
   rows.slice(0, 40).forEach(f => {
     const b = document.createElement('button');
     b.className = 'card';
@@ -176,6 +176,7 @@ $('loc').onclick = () => navigator.geolocation.getCurrentPosition(p => {
 }, () => { $('st').textContent = 'لم يُسمح بالوصول إلى موقعك.'; });
 
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
+setTimeout(() => { map.invalidateSize(); map.setView(...VIEW[S.region]); }, 300);
 load();
 setInterval(load, 10000);
 </script>
