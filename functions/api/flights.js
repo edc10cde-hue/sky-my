@@ -46,6 +46,21 @@ async function opensky(region, env) {
   return d;
 }
 
+const CENTER = { iraq: [33.3, 43.9, 250], gulf: [30, 46, 250] };
+async function adsb(region) {
+  const c = CENTER[region];
+  if (!c) throw new Error('adsb: region not supported');
+  const r = await fetch('https://api.adsb.lol/v2/point/' + c.join('/'));
+  if (!r.ok) throw new Error('adsb ' + r.status);
+  const j = await r.json();
+  let d = (j.ac || [])
+    .filter(a => a.lat != null && a.lon != null && typeof a.alt_baro === 'number')
+    .map(a => ({ id: a.hex, call: (a.flight || '').trim() || a.hex, country: [a.t, a.r].filter(Boolean).join(' '),
+      lon: a.lon, lat: a.lat, alt: Math.round(a.alt_baro), spd: Math.round(a.gs || 0), trk: Math.round(a.track || 0) }));
+  if (region === 'iraq') d = d.filter(f => inside(f.lon, f.lat, IRAQ));
+  return d;
+}
+
 // Deterministic simulation (no server state needed)
 function simulate() {
   const t = Date.now() / 1000, al = ['IA', 'EK', 'QR', 'TK', 'FZ'];
@@ -62,9 +77,10 @@ function simulate() {
 export async function onRequestGet({ request, env }) {
   const u = new URL(request.url);
   const region = BOX[u.searchParams.get('region')] !== undefined ? u.searchParams.get('region') : 'iraq';
-  const source = u.searchParams.get('source') === 'sim' ? 'sim' : 'opensky';
+  const sp = u.searchParams.get('source');
+  const source = sp === 'sim' || sp === 'adsb' ? sp : 'opensky';
   try {
-    const flights = source === 'sim' ? simulate() : await opensky(region, env);
+    const flights = source === 'sim' ? simulate() : source === 'adsb' ? await adsb(region) : await opensky(region, env);
     return new Response(JSON.stringify({ flights, source, at: Date.now() }), {
       headers: { 'Content-Type': 'application/json', 'Cache-Control': 'public, s-maxage=10' }
     });
