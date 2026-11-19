@@ -75,15 +75,47 @@ function bearing(a, b, c, d) {
 const icon = trk => L.divIcon({ className: '', iconSize: [24, 24],
   html: '<svg class="pl" width="24" height="24" viewBox="0 0 24 24" style="transform:rotate(' + trk + 'deg)" fill="#3DD6C6"><path d="M12 2l2 8 8 4v2l-8-2-1 5 3 2v1l-4-1-4 1v-1l3-2-1-5-8 2v-2l8-4z"/></svg>' });
 
-async function load() {
-  try {
-    const r = await fetch('/api/flights?source=' + S.source + '&region=' + S.region);
-    if (!r.ok) throw 0;
-    S.flights = (await r.json()).flights;
-    $('st').textContent = '';
-  } catch {
-    $('st').textContent = 'تعذر جلب البيانات. جرّب المصدر التجريبي أو أعد المحاولة بعد قليل.';
+const IRAQ = [[42.35,37.1],[44.8,37.15],[45.4,35.9],[46.1,35.1],[45.6,34.0],[46.2,33.1],[47.6,32.4],[48.0,30.9],[48.0,30.0],[47.2,29.1],[46.5,29.1],[44.7,29.2],[41.0,31.0],[39.2,32.1],[38.9,32.0],[40.8,33.5],[41.3,34.6],[41.2,36.4]];
+const BOX = { iraq: 'lamin=28.8&lomin=38.7&lamax=37.5&lomax=48.8', gulf: 'lamin=22&lomin=34&lamax=42&lomax=62', world: '' };
+function inside(lon, lat, poly) {
+  let c = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, yi] = poly[i], [xj, yj] = poly[j];
+    if ((yi > lat) !== (yj > lat) && lon < ((xj - xi) * (lat - yi)) / (yj - yi) + xi) c = !c;
   }
+  return c;
+}
+async function direct() {
+  const r = await fetch('https://opensky-network.org/api/states/all?' + BOX[S.region]);
+  if (!r.ok) throw 0;
+  const j = await r.json();
+  let d = (j.states || []).filter(s => s[5] != null && s[6] != null && !s[8]).map(s => ({
+    id: s[0], call: (s[1] || '').trim() || s[0], country: s[2], lon: s[5], lat: s[6],
+    alt: Math.round((s[7] || 0) * 3.281), spd: Math.round((s[9] || 0) * 1.944), trk: Math.round(s[10] || 0) }));
+  if (S.region === 'iraq') d = d.filter(f => inside(f.lon, f.lat, IRAQ));
+  return d;
+}
+async function api(source) {
+  const r = await fetch('/api/flights?source=' + source + '&region=' + S.region);
+  if (!r.ok) throw 0;
+  return (await r.json()).flights;
+}
+async function load() {
+  let msg = '';
+  try {
+    S.flights = S.source === 'sim' ? await api('sim') : await api('opensky');
+  } catch {
+    try {
+      if (S.source === 'sim') throw 0;
+      S.flights = await direct();
+    } catch {
+      try {
+        S.flights = await api('sim');
+        msg = 'تعذر الوصول إلى OpenSky. تُعرض بيانات تجريبية الآن.';
+      } catch { msg = 'تعذر جلب البيانات. أعد المحاولة بعد قليل.'; }
+    }
+  }
+  $('st').textContent = msg;
   draw();
 }
 
